@@ -11,21 +11,20 @@
 #include <random>
 #include<time.h> 
 
-double maximum = 0.0;
-double maximumCookTorrance = 0.0;
-
 #define M_PI 3.14159
 #define NUMBER_GROOVE_SAMPLING 10
-#define MAX_DEPTH 5
-#define NB_SECONDARY_RAY 0
+#define MAX_DEPTH 4
+#define NB_SECONDARY_RAY 3
+
+#define DISPLAY_PAPER_CONTRIBUTION 0
 
 #define DISPLAY_ONLY_MULITPLE_SCATTERING 0
 
-#define MAX_BOUNCES 10
+#define MAX_BOUNCES 20
 
-#define PAPER_ROUGHNESS 0.1
+#define PAPER_ROUGHNESS 0.2
 
-#define NUMBER_SAMPLES 1
+#define NUMBER_SAMPLES 10
 
 int numberk = 0;
 int number = 0;
@@ -262,7 +261,7 @@ double cookTorranceBRDF(const Vec &wi, const Vec &n, const Vec &wo, const double
 	return fs + kd;
 }
 
-double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const double thetav, const double G, const int number_bounces, const double roughness, const double metallic)
+double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const double thetav, const int number_bounces, const double roughness, const double metallic)
 {
 	Vec wh = (wi + wo).normalize();
 	const double thetad = wh.dot(wi);
@@ -290,12 +289,13 @@ double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const doub
 			}
 
 			product *= F;
+
 			if (product == 0.0)
 			{
 				break;
 			}
 		}
-		sum += sin(thetas) / (double)(k * sin(thetah)) * product * D * Gbis * wi.dot(s) / (4.0 * cos(thetad) * wi.dot(s) * wo.dot(s));
+		sum += sin(thetas) / (double)(k * sin(thetah)) * product  * D * Gbis * wi.dot(s) / (4.0 * cos(thetad) * wi.dot(s) * wo.dot(s));
 	}
 
 	return sum;
@@ -354,6 +354,25 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 		Vec rad = Vec(0.0, 0.0, 0.0);
 		Vec radByCookTorrance = Vec(0.0, 0.0, 0.0);
 
+		for (unsigned int lightIt = 0; lightIt < lights.size(); ++lightIt)
+		{
+			const Sphere &light = spheres[lights[lightIt]];
+
+			// TODO
+			const Vec dirToLight = (light.randomSample() - x).normalize();
+			const Ray &toLight = Ray(x + 0.0001 * dirToLight, dirToLight);
+			int idTemp;
+			double tTemp;
+			if (intersectScene(toLight, tTemp, idTemp))
+			{
+				if (idTemp == lights[lightIt])
+				{
+					const Vec Li = light.e;
+					radByCookTorrance = radByCookTorrance + Li.mult(obj.c) * cookTorranceBRDF(-1.0 * r.d, n, toLight.d, obj.metallic, obj.roughness, obj.kd) * (n.dot(toLight.d)) / (NB_SECONDARY_RAY + 1);
+				}
+			}
+		}
+
 		Vec wi = -1.0 * r.d;
 
 		for (unsigned int i = 0; i < NUMBER_GROOVE_SAMPLING; i++)
@@ -365,12 +384,6 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 
 			double thetav = acos(n.dot(grooveNormal)); //acos(n.dot(grooveNormal));
 			double thetai = acos(wi.dot(n));
-
-			const int k = floor((M_PI + 2 * thetai) / thetav) + 1;
-			const int kReflections = sampleK(GkMinus1, Gk);
-			const double G = kReflections == 0 ? GkMinus1 : Gk;
-
-			const Vec wo = computeOutputDirection(n, grooveNormal, wi, thetai, thetav, k, kReflections);
 
 			for (unsigned int lightIt = 0; lightIt < lights.size(); ++lightIt)
 			{
@@ -386,8 +399,7 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 					if (idTemp == lights[lightIt])
 					{
 						const Vec Li = light.e;
-						radByCookTorrance = radByCookTorrance + Li.mult(obj.c) * cookTorranceBRDF(-1.0 * r.d, n, toLight.d, obj.metallic, obj.roughness, obj.kd) * (n.dot(toLight.d)) / (NB_SECONDARY_RAY + 1);
-						rad = rad + Li.mult(obj.c) * brdf(grooveNormal, wi, n, toLight.d, thetav, G, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(toLight.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
+						rad = rad + Li.mult(obj.c) * brdf(grooveNormal, wi, n, toLight.d, thetav, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(toLight.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
 					}
 				}
 			}
@@ -397,18 +409,15 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 			{
 				const Vec newDir = randomSampleOnHemisphere(n).normalize();
 				const Ray &newRay = Ray(x + 0.0001 * newDir, newDir);
-				rad = rad + radiance(newRay, depth) * brdf(grooveNormal, wi, n, newRay.d, thetav, G, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(newRay.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
+				rad = rad + radiance(newRay, depth) * brdf(grooveNormal, wi, n, newRay.d, thetav, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(newRay.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
 			}
 		}
-		if (rad.x > maximum)
+
+		if (DISPLAY_PAPER_CONTRIBUTION)
 		{
-			maximum = rad.x;
+			return rad - radByCookTorrance;
 		}
-		if (DISPLAY_ONLY_MULITPLE_SCATTERING)
-		{
-			rad = rad.mult(Vec(10.0, 10.0, 10.0));
-		}
-		return rad / 1.3;
+		return rad;
 	}
 	else if (obj.refl == DIFFUSE)
 	{ // Ideal DIFFUSE reflection
@@ -442,10 +451,6 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 			rad = rad + radiance(newRay, depth) * cookTorranceBRDF(-1.0 * r.d, n, newDir, obj.metallic, obj.roughness, obj.kd) * (n.dot(newRay.d)) / (NB_SECONDARY_RAY+1); // FIXME : Have to be normalized
 		}
 
-		if (rad.x > maximumCookTorrance)
-		{
-			maximumCookTorrance = rad.x;
-		}
 		return rad;
 	}
 	else if (obj.refl == MIRROR)
@@ -486,9 +491,9 @@ int main(int argc, char *argv[])
 	spheres.push_back(Sphere(1e5, Vec(50, 40.8, -1e5 + 170), Vec(0, 0, 0), Vec(0, 0, 0), DIFFUSE, 0.2, 0.8, 0.5));        //Front
 	spheres.push_back(Sphere(1e5, Vec(50, 1e5, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 1.0, 0.0, 0.5));         //Bottom
 	spheres.push_back(Sphere(1e5, Vec(50, -1e5 + 81.6, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 0.5, 0.5, 0.5)); //Top
-	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), DIFFUSE, 0.9, 0.8, 0.0));         //Cook-Torrance sphere
-	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), ROUGH, 0.9, 0.8, 0.0));         //Paper's BRDF sphere
-	spheres.push_back(Sphere(0.5, Vec(50, 70, 100), Vec(1, 1, 1), Vec(0, 0, 0), EMMISSIVE, 0.0, 0.0, 0.0));                  //Light
+	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), DIFFUSE, 0.6, 0.9, 0.4));         //Cook-Torrance sphere
+	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), ROUGH, 0.9, 0.7, 0.0));         //Paper's BRDF sphere
+	spheres.push_back(Sphere(16.5, Vec(50, 70, 100), Vec(1, 1, 1), Vec(0, 0, 0), EMMISSIVE, 0.0, 0.0, 0.0));                  //Light
 	lights.push_back(8);
 
 	// ray trace:
@@ -519,8 +524,4 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < w * h; i++)
 		fprintf(f, "%d %d %d ", (int)(pixelsColor[i].x * 255), (int)(pixelsColor[i].y * 255), (int)(pixelsColor[i].z * 255));
 	fclose(f);
-
-	std::cout << std ::endl;
-	std::cout << maximum << std::endl;
-	std::cout << maximumCookTorrance << std::endl;
 }
