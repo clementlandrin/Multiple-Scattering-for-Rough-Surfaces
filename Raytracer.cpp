@@ -12,16 +12,15 @@
 #include<time.h> 
 
 #define M_PI 3.14159
-#define NUMBER_GROOVE_SAMPLING 3
+#define NUMBER_GROOVE_SAMPLING 10
 #define MAX_DEPTH 5
 #define NB_SECONDARY_RAY 0
 
 #define MAX_BOUNCES 1
 
-#define PAPER_METALLIC 0.2
-#define PAPER_ROUGHNESS 0.2
+#define PAPER_ROUGHNESS 0.00001
 
-#define NUMBER_SAMPLES 1
+#define NUMBER_SAMPLES 10
 
 int numberk = 0;
 int number = 0;
@@ -253,7 +252,7 @@ double cookTorranceBRDF(const Vec &wi, const Vec &n, const Vec &wo, const double
 	return fs + kd;
 }
 
-double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const double thetav, const double G, const int number_bounces)
+double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const double thetav, const double G, const int number_bounces, const double roughness, const double metallic)
 {
 	Vec wh = (wi + wo).normalize();
 	const double thetad = wh.dot(wi);
@@ -263,7 +262,7 @@ double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const doub
 
 	const double thetai = wi.dot(n);
 
-	double D = distributionTerm(s, wh, PAPER_ROUGHNESS);
+	double D = distributionTerm(s, wh, roughness);
 
 	double sum = 0.0;
 
@@ -272,7 +271,7 @@ double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const doub
 		double product = 1.0;
 		for (int j = 1; j <= k; j++)
 		{
-			double F = fresnelTerm(abs(thetai + thetas * pow(-1.0, j)), PAPER_METALLIC); 
+			double F = fresnelTerm(abs(thetai + thetas * pow(-1.0, j)), metallic); 
 			product *= F * D * G * wi.dot(s); // * wi.dot(s) ?
 		}
 		sum += sin(thetas) / (double)(k * sin(thetah)) * product / (4.0 * cos(thetad) * wi.dot(n) * wo.dot(n));
@@ -332,13 +331,14 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 	if (obj.refl == ROUGH)
 	{ // Ideal DIFFUSE reflection
 		Vec rad = Vec(0.0, 0.0, 0.0);
+		Vec wi = -1.0 * r.d;
 
 		for (unsigned int i = 0; i < NUMBER_GROOVE_SAMPLING; i++)
 		{
 			const Vec grooveNormal = sampleGrooveNormal(n);
-			Vec wi = -1.0 * r.d;
 
-			const double GkMinus1 = computeGeometricTerm(n, wi, grooveNormal, false);
+
+			/*const double GkMinus1 = computeGeometricTerm(n, wi, grooveNormal, false);
 			const double Gk = computeGeometricTerm(n, wi, grooveNormal, true);
 			
 			double thetav = acos(n.dot(grooveNormal));
@@ -348,14 +348,25 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 			const int kReflections = sampleK(GkMinus1, Gk);
 			const double G = kReflections == 0 ? GkMinus1 : Gk;
 
-			const Vec wo = computeOutputDirection(n, grooveNormal, wi, thetai, thetav, k, kReflections);
+			const Vec wo = computeOutputDirection(n, grooveNormal, wi, thetai, thetav, k, kReflections);*/
 
-			const Ray &outRay = Ray(x + 0.0001 * wo, wo);
-			int idTemp;
-			double tTemp;
-			if (intersectScene(outRay, tTemp, idTemp))
+			for (unsigned int lightIt = 0; lightIt < lights.size(); ++lightIt)
 			{
-				rad = rad + obj.c * radiance(outRay, depth, false) * cookTorranceBRDF(wi, grooveNormal, wo, 0.7, 0.7, obj.kd);//brdf(grooveNormal, wi, n, wo, thetav, G, k - 1 + kReflections) / NUMBER_GROOVE_SAMPLING;
+				const Sphere &light = spheres[lights[lightIt]];
+
+				// TODO
+				const Vec dirToLight = (light.randomSample() - x).normalize();
+				const Ray &toLight = Ray(x + 0.0001 * dirToLight, dirToLight);
+				int idTemp;
+				double tTemp;
+				if (intersectScene(toLight, tTemp, idTemp))
+				{
+					if (idTemp == lights[lightIt])
+					{
+						const Vec Li = light.e;
+						rad = rad + Li.mult(obj.c) * cookTorranceBRDF(wi, grooveNormal, toLight.d, obj.metallic, obj.roughness, obj.kd) * (grooveNormal.dot(toLight.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
+					}
+				}
 			}
 		}
 
@@ -365,6 +376,7 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 	{ // Ideal DIFFUSE reflection
 		// We shoot rays towards all lights:
 		Vec rad;
+		Vec wi = -1.0 * r.d;
 		for (unsigned int lightIt = 0; lightIt < lights.size(); ++lightIt)
 		{
 			const Sphere &light = spheres[lights[lightIt]];
@@ -432,9 +444,9 @@ int main(int argc, char *argv[])
 	spheres.push_back(Sphere(1e5, Vec(50, 40.8, -1e5 + 170), Vec(0, 0, 0), Vec(0, 0, 0), DIFFUSE, 0.2, 0.8, 0.5));        //Front
 	spheres.push_back(Sphere(1e5, Vec(50, 1e5, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 1.0, 0.0, 0.5));         //Bottom
 	spheres.push_back(Sphere(1e5, Vec(50, -1e5 + 81.6, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 0.5, 0.5, 0.5)); //Top
-	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75), DIFFUSE, 0.7, 0.7, 0.3));         //Cook-Torrance sphere
-	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75) * .999, ROUGH, PAPER_METALLIC, PAPER_ROUGHNESS, 0.3));         //Paper's BRDF sphere
-	spheres.push_back(Sphere(30, Vec(50, 70, 10), Vec(1, 1, 1), Vec(0, 0, 0), EMMISSIVE, 0.0, 0.0, 0.0));                  //Light
+	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75), DIFFUSE, 0.7, 0.3, 0.0));         //Cook-Torrance sphere
+	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75), ROUGH, 0.7, 0.3, 0.0));         //Paper's BRDF sphere
+	spheres.push_back(Sphere(0.5, Vec(50, 70, 100), Vec(1, 1, 1), Vec(0, 0, 0), EMMISSIVE, 0.0, 0.0, 0.0));                  //Light
 	lights.push_back(8);
 
 	// ray trace:
