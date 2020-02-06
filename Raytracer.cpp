@@ -11,16 +11,21 @@
 #include <random>
 #include<time.h> 
 
+double maximum = 0.0;
+double maximumCookTorrance = 0.0;
+
 #define M_PI 3.14159
 #define NUMBER_GROOVE_SAMPLING 10
 #define MAX_DEPTH 5
 #define NB_SECONDARY_RAY 0
 
-#define MAX_BOUNCES 1
+#define DISPLAY_ONLY_MULITPLE_SCATTERING 0
 
-#define PAPER_ROUGHNESS 0.00001
+#define MAX_BOUNCES 10
 
-#define NUMBER_SAMPLES 10
+#define PAPER_ROUGHNESS 0.1
+
+#define NUMBER_SAMPLES 1
 
 int numberk = 0;
 int number = 0;
@@ -165,7 +170,7 @@ inline bool intersectScene(const Ray &r, double &t, int &id)
 	return t < inf;
 }
 
-double computeGeometricTerm(const Vec &n, const Vec &i, const Vec &s, bool kReflections)
+double computePaperGeometricTerm(const Vec &n, const Vec &i, const Vec &s, bool kReflections)
 {
 	double thetav = acos(n.dot(s));
 	double thetai = acos(i.dot(n));
@@ -230,6 +235,13 @@ Vec sampleGrooveNormal(const Vec &n)
 	return Vec(std::sin(theta) * std::cos(phi), std::sin(theta) * std::sin(phi), std::cos(theta));
 }
 
+double geometricTerm(Vec n, Vec wi, Vec wo, double roughness)
+{
+	double Gi = 2 * n.dot(wi) / (n.dot(wi) + sqrt(pow(roughness, 2) + (1 - pow(roughness, 2)) * pow(n.dot(wi), 2)));
+	double Go = 2 * n.dot(wo) / (n.dot(wo) + sqrt(pow(roughness, 2) + (1 - pow(roughness, 2)) * pow(n.dot(wo), 2)));
+	return Gi * Go;
+}
+
 double fresnelTerm(double udotv, double metallic)
 {
 	return metallic + (1 - metallic)*pow(1 - max(0, udotv), 5);
@@ -245,9 +257,7 @@ double cookTorranceBRDF(const Vec &wi, const Vec &n, const Vec &wo, const double
 	Vec wh = (wi + wo).normalize();
 	double F = metallic + (1 - metallic)*pow(1 - max(0, wi.dot(wh)), 5);
 	double D = pow(roughness, 2) / (M_PI * pow((1 + (pow(roughness, 2) - 1) * pow(n.dot(wh), 2)), 2));
-	double Gi = 2 * n.dot(wi) / (n.dot(wi) + sqrt(pow(roughness, 2) + (1 - pow(roughness, 2)) * pow(n.dot(wi), 2)));
-	double Go = 2 * n.dot(wo) / (n.dot(wo) + sqrt(pow(roughness, 2) + (1 - pow(roughness, 2)) * pow(n.dot(wo), 2)));
-	double G = Gi * Go;
+	double G = geometricTerm(n, wi, wo, roughness);
 	double fs = D * F * G / (4 * n.dot(wi) * n.dot(wo));
 	return fs + kd;
 }
@@ -266,15 +276,26 @@ double brdf(const Vec &s, const Vec &wi, const Vec &n, const Vec &wo, const doub
 
 	double sum = 0.0;
 
-	for (int k = 1; k <= MAX_BOUNCES; k++)
+	double Gbis = geometricTerm(s, wi, wo, roughness);
+
+	for (int k = 1 + DISPLAY_ONLY_MULITPLE_SCATTERING; k <= MAX_BOUNCES; k++)
 	{
 		double product = 1.0;
 		for (int j = 1; j <= k; j++)
 		{
-			double F = fresnelTerm(abs(thetai + thetas * pow(-1.0, j)), metallic); 
-			product *= F * D * G * wi.dot(s); // * wi.dot(s) ?
+			double F = max(fresnelTerm(abs(- thetai - thetas * pow(-1.0, j)), metallic), 0.0);
+			if (j != 1 && F != 0.0)
+			{
+				//std::cout << "There is" << std::endl;
+			}
+
+			product *= F;
+			if (product == 0.0)
+			{
+				break;
+			}
 		}
-		sum += sin(thetas) / (double)(k * sin(thetah)) * product / (4.0 * cos(thetad) * wi.dot(n) * wo.dot(n));
+		sum += sin(thetas) / (double)(k * sin(thetah)) * product * D * Gbis * wi.dot(s) / (4.0 * cos(thetad) * wi.dot(s) * wo.dot(s));
 	}
 
 	return sum;
@@ -331,24 +352,25 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 	if (obj.refl == ROUGH)
 	{ // Ideal DIFFUSE reflection
 		Vec rad = Vec(0.0, 0.0, 0.0);
+		Vec radByCookTorrance = Vec(0.0, 0.0, 0.0);
+
 		Vec wi = -1.0 * r.d;
 
 		for (unsigned int i = 0; i < NUMBER_GROOVE_SAMPLING; i++)
 		{
 			const Vec grooveNormal = sampleGrooveNormal(n);
 
+			const double GkMinus1 = computePaperGeometricTerm(n, wi, grooveNormal, false);
+			const double Gk = computePaperGeometricTerm(n, wi, grooveNormal, true);
 
-			/*const double GkMinus1 = computeGeometricTerm(n, wi, grooveNormal, false);
-			const double Gk = computeGeometricTerm(n, wi, grooveNormal, true);
-			
-			double thetav = acos(n.dot(grooveNormal));
+			double thetav = acos(n.dot(grooveNormal)); //acos(n.dot(grooveNormal));
 			double thetai = acos(wi.dot(n));
 
 			const int k = floor((M_PI + 2 * thetai) / thetav) + 1;
 			const int kReflections = sampleK(GkMinus1, Gk);
 			const double G = kReflections == 0 ? GkMinus1 : Gk;
 
-			const Vec wo = computeOutputDirection(n, grooveNormal, wi, thetai, thetav, k, kReflections);*/
+			const Vec wo = computeOutputDirection(n, grooveNormal, wi, thetai, thetav, k, kReflections);
 
 			for (unsigned int lightIt = 0; lightIt < lights.size(); ++lightIt)
 			{
@@ -364,13 +386,29 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 					if (idTemp == lights[lightIt])
 					{
 						const Vec Li = light.e;
-						rad = rad + Li.mult(obj.c) * cookTorranceBRDF(wi, grooveNormal, toLight.d, obj.metallic, obj.roughness, obj.kd) * (grooveNormal.dot(toLight.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
+						radByCookTorrance = radByCookTorrance + Li.mult(obj.c) * cookTorranceBRDF(-1.0 * r.d, n, toLight.d, obj.metallic, obj.roughness, obj.kd) * (n.dot(toLight.d)) / (NB_SECONDARY_RAY + 1);
+						rad = rad + Li.mult(obj.c) * brdf(grooveNormal, wi, n, toLight.d, thetav, G, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(toLight.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
 					}
 				}
 			}
-		}
 
-		return rad;
+			// TODO : add secondary rays:
+			for (unsigned int i = 0; i < NB_SECONDARY_RAY; i++)
+			{
+				const Vec newDir = randomSampleOnHemisphere(n).normalize();
+				const Ray &newRay = Ray(x + 0.0001 * newDir, newDir);
+				rad = rad + radiance(newRay, depth) * brdf(grooveNormal, wi, n, newRay.d, thetav, G, MAX_BOUNCES, obj.roughness, obj.metallic) * (grooveNormal.dot(newRay.d)) / (NB_SECONDARY_RAY + 1) / NUMBER_GROOVE_SAMPLING;
+			}
+		}
+		if (rad.x > maximum)
+		{
+			maximum = rad.x;
+		}
+		if (DISPLAY_ONLY_MULITPLE_SCATTERING)
+		{
+			rad = rad.mult(Vec(10.0, 10.0, 10.0));
+		}
+		return rad / 1.3;
 	}
 	else if (obj.refl == DIFFUSE)
 	{ // Ideal DIFFUSE reflection
@@ -404,6 +442,10 @@ Vec radiance(const Ray &r, int depth, bool hit_only_lights = false)
 			rad = rad + radiance(newRay, depth) * cookTorranceBRDF(-1.0 * r.d, n, newDir, obj.metallic, obj.roughness, obj.kd) * (n.dot(newRay.d)) / (NB_SECONDARY_RAY+1); // FIXME : Have to be normalized
 		}
 
+		if (rad.x > maximumCookTorrance)
+		{
+			maximumCookTorrance = rad.x;
+		}
 		return rad;
 	}
 	else if (obj.refl == MIRROR)
@@ -444,8 +486,8 @@ int main(int argc, char *argv[])
 	spheres.push_back(Sphere(1e5, Vec(50, 40.8, -1e5 + 170), Vec(0, 0, 0), Vec(0, 0, 0), DIFFUSE, 0.2, 0.8, 0.5));        //Front
 	spheres.push_back(Sphere(1e5, Vec(50, 1e5, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 1.0, 0.0, 0.5));         //Bottom
 	spheres.push_back(Sphere(1e5, Vec(50, -1e5 + 81.6, 81.6), Vec(0, 0, 0), Vec(.75, .75, .75), DIFFUSE, 0.5, 0.5, 0.5)); //Top
-	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75), DIFFUSE, 0.7, 0.3, 0.0));         //Cook-Torrance sphere
-	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(0.75, 0.75, 0.75), ROUGH, 0.7, 0.3, 0.0));         //Paper's BRDF sphere
+	spheres.push_back(Sphere(16.5, Vec(27, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), DIFFUSE, 0.9, 0.8, 0.0));         //Cook-Torrance sphere
+	spheres.push_back(Sphere(16.5, Vec(73, 16.5, 78), Vec(0, 0, 0), Vec(1.0, 1.0, 1.0), ROUGH, 0.9, 0.8, 0.0));         //Paper's BRDF sphere
 	spheres.push_back(Sphere(0.5, Vec(50, 70, 100), Vec(1, 1, 1), Vec(0, 0, 0), EMMISSIVE, 0.0, 0.0, 0.0));                  //Light
 	lights.push_back(8);
 
@@ -477,4 +519,8 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < w * h; i++)
 		fprintf(f, "%d %d %d ", (int)(pixelsColor[i].x * 255), (int)(pixelsColor[i].y * 255), (int)(pixelsColor[i].z * 255));
 	fclose(f);
+
+	std::cout << std ::endl;
+	std::cout << maximum << std::endl;
+	std::cout << maximumCookTorrance << std::endl;
 }
